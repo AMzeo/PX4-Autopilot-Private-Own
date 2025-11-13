@@ -43,14 +43,25 @@
 #include <px4_platform_common/spi.h>
 #include <uORB/uORB.h>
 #include <sys/boardctl.h>
+#include <syslog.h>
 
 extern "C" void px4_userspace_init(void)
 {
+	syslog(LOG_ERR, "[userspace_init] Starting px4_userspace_init\n");
+
+	syslog(LOG_ERR, "[userspace_init] Calling hrt_init\n");
 	hrt_init();
+	syslog(LOG_ERR, "[userspace_init] hrt_init completed\n");
 
+	syslog(LOG_ERR, "[userspace_init] Calling px4_set_spi_buses_from_hw_version\n");
 	px4_set_spi_buses_from_hw_version();
+	syslog(LOG_ERR, "[userspace_init] px4_set_spi_buses_from_hw_version completed\n");
 
+	syslog(LOG_ERR, "[userspace_init] Calling WorkQueueManagerStart\n");
 	px4::WorkQueueManagerStart();
+	syslog(LOG_ERR, "[userspace_init] WorkQueueManagerStart completed\n");
 
+	syslog(LOG_ERR, "[userspace_init] Calling uorb_start\n");
 	uorb_start();
+	syslog(LOG_ERR, "[userspace_init] px4_userspace_init completed\n");
 }

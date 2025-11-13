@@ -48,6 +48,7 @@
 
 #include <limits.h>
 #include <string.h>
+#include <syslog.h>
 
 using namespace time_literals;
 
@@ -62,6 +63,7 @@ static BlockingQueue<const wq_config_t *, 1> *_wq_manager_create_queue{nullptr};
 
 static px4::atomic_bool _wq_manager_should_exit{true};
 static px4::atomic_bool _wq_manager_running{false};
+static px4::atomic_bool _wq_manager_initialized{false};
 
 
 static WorkQueue *
@@ -257,10 +259,13 @@ WorkQueueRunner(int argc, char *argv[])
 static int
 WorkQueueManagerRun(int, char **)
 {
+	syslog(LOG_ERR, "[wq_mgr] WorkQueueManagerRun: starting\n");
 	_wq_manager_wqs_list = new BlockingList<WorkQueue *>();
 	_wq_manager_create_queue = new BlockingQueue<const wq_config_t *, 1>();
+	syslog(LOG_ERR, "[wq_mgr] WorkQueueManagerRun: setting _wq_manager_running to true\n");
 	_wq_manager_running.store(true);
 
+	syslog(LOG_ERR, "[wq_mgr] WorkQueueManagerRun: entering main loop\n");
 	while (!_wq_manager_should_exit.load()) {
 		// create new work queues as needed
 		const wq_config_t *wq = _wq_manager_create_queue->pop();
@@ -371,10 +376,25 @@ WorkQueueManagerRun(int, char **)
 int
 WorkQueueManagerStart()
 {
+	syslog(LOG_ERR, "[wq_mgr] WorkQueueManagerStart: entry\n");
+
+	// Workaround for C++ static initialization issue in embedded systems
+	// The atomic_bool initialization {true} may not work, so explicitly initialize on first call
+	if (!_wq_manager_initialized.load()) {
+		syslog(LOG_ERR, "[wq_mgr] First call - initializing static variables\n");
+		_wq_manager_should_exit.store(true);
+		_wq_manager_running.store(false);
+		_wq_manager_initialized.store(true);
+	}
+
+	syslog(LOG_ERR, "[wq_mgr] _wq_manager_should_exit=%d, _wq_manager_running=%d\n",
+		_wq_manager_should_exit.load(), _wq_manager_running.load());
+
 	if (_wq_manager_should_exit.load() && !_wq_manager_running.load()) {
 
 		_wq_manager_should_exit.store(false);
 
+		syslog(LOG_ERR, "[wq_mgr] WorkQueueManagerStart: spawning wq:manager task\n");
 		int task_id = px4_task_spawn_cmd("wq:manager",
 						 SCHED_DEFAULT,
 						 SCHED_PRIORITY_MAX,
@@ -384,27 +404,33 @@ WorkQueueManagerStart()
 
 		if (task_id < 0) {
 			_wq_manager_should_exit.store(true);
-			PX4_ERR("task start failed (%i)", task_id);
+			syslog(LOG_ERR, "[wq_mgr] task start failed (%i)\n", task_id);
 			return -errno;
 		}
+
+		syslog(LOG_ERR, "[wq_mgr] WorkQueueManagerStart: task spawned with id %d, waiting for init\n", task_id);
 
 		// Wait until initialized
 		int max_tries = 1000;
 
 		while (!_wq_manager_running.load() && --max_tries > 0) {
+			syslog(LOG_ERR, "[wq_mgr] Waiting... tries left=%d, running=%d\n", max_tries, _wq_manager_running.load());
 			px4_usleep(1000);
 		}
 
 		if (max_tries <= 0) {
-			PX4_ERR("failed to wait for task to start");
+			syslog(LOG_ERR, "[wq_mgr] failed to wait for task to start (timeout after 1000ms)\n");
 			return PX4_ERROR;
 		}
 
+		syslog(LOG_ERR, "[wq_mgr] WorkQueueManagerStart: task started successfully, tries left: %d\n", max_tries);
+
 	} else {
-		PX4_WARN("already running");
+		syslog(LOG_ERR, "[wq_mgr] already running\n");
 		return PX4_ERROR;
 	}
 
+	syslog(LOG_ERR, "[wq_mgr] WorkQueueManagerStart: returning OK\n");
 	return PX4_OK;
 }
 

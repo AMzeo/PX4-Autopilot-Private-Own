@@ -124,20 +124,26 @@ void px4_platform_i2c_init()
 
 int px4_platform_init()
 {
+	syslog(LOG_ERR, "[px4_init] Starting px4_platform_init\n");
 
 #if !defined(CONFIG_BUILD_FLAT)
+	syslog(LOG_ERR, "[px4_init] Calling cxx_initialize\n");
 	cxx_initialize();
 
+	syslog(LOG_ERR, "[px4_init] Calling kernel_ioctl_initialize\n");
 	/* initialize userspace-kernelspace call gate interface */
 	kernel_ioctl_initialize();
 #endif
 
+	syslog(LOG_ERR, "[px4_init] Calling px4_console_buffer_init\n");
 	int ret = px4_console_buffer_init();
 
 	if (ret < 0) {
+		syslog(LOG_ERR, "[px4_init] px4_console_buffer_init FAILED: %d\n", ret);
 		return ret;
 	}
 
+	syslog(LOG_ERR, "[px4_init] Opening console buffer device\n");
 	// replace stdout with our buffered console
 	int fd_buf = open(CONSOLE_BUFFER_DEVICE, O_WRONLY);
 
@@ -148,27 +154,35 @@ int px4_platform_init()
 	}
 
 #if defined(PX4_CRYPTO)
+	syslog(LOG_ERR, "[px4_init] Initializing crypto\n");
 	PX4Crypto::px4_crypto_init();
 #endif
 
+	syslog(LOG_ERR, "[px4_init] Calling hrt_init\n");
 	hrt_init();
+	syslog(LOG_ERR, "[px4_init] hrt_init completed\n");
 
 #if !defined(CONFIG_BUILD_FLAT)
+	syslog(LOG_ERR, "[px4_init] Calling hrt_ioctl_init\n");
 	hrt_ioctl_init();
+	syslog(LOG_ERR, "[px4_init] Calling events_ioctl_init\n");
 	events_ioctl_init();
 #endif
 
 	/* configure CPU load estimation */
 #ifdef CONFIG_SCHED_INSTRUMENTATION
+	syslog(LOG_ERR, "[px4_init] Calling cpuload_initialize_once\n");
 	cpuload_initialize_once();
 #endif
 
 
 #if defined(CONFIG_I2C) && !defined(BOARD_I2C_LATEINIT)
+	syslog(LOG_ERR, "[px4_init] Initializing I2C\n");
 	px4_platform_i2c_init();
 #endif
 
 #if defined(CONFIG_FS_PROCFS)
+	syslog(LOG_ERR, "[px4_init] Mounting procfs\n");
 	int ret_mount_procfs = mount(nullptr, "/proc", "procfs", 0, nullptr);
 
 	if (ret_mount_procfs < 0) {
@@ -178,6 +192,7 @@ int px4_platform_init()
 #endif // CONFIG_FS_PROCFS
 
 #if defined(CONFIG_FS_BINFS)
+	syslog(LOG_ERR, "[px4_init] Mounting binfs\n");
 	int ret_mount_binfs = nx_mount(nullptr, "/bin", "binfs", 0, nullptr);
 
 	if (ret_mount_binfs < 0) {
@@ -186,14 +201,19 @@ int px4_platform_init()
 
 #endif // CONFIG_FS_BINFS
 
+	syslog(LOG_ERR, "[px4_init] Starting WorkQueueManager\n");
 	px4::WorkQueueManagerStart();
 
+	syslog(LOG_ERR, "[px4_init] Calling param_init\n");
 	param_init();
 
+	syslog(LOG_ERR, "[px4_init] Calling uorb_start\n");
 	uorb_start();
 
+	syslog(LOG_ERR, "[px4_init] Calling px4_log_initialize\n");
 	px4_log_initialize();
 
+	syslog(LOG_ERR, "[px4_init] px4_platform_init completed successfully\n");
 	return PX4_OK;
 }
 

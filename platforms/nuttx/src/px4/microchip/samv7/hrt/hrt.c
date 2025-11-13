@@ -50,6 +50,7 @@
 #include <queue.h>
 #include <errno.h>
 #include <string.h>
+#include <syslog.h>
 
 #include <board_config.h>
 #include <drivers/drv_hrt.h>
@@ -144,12 +145,15 @@ hrt_abstime hrt_absolute_time(void)
  */
 void hrt_init(void)
 {
+	syslog(LOG_ERR, "[hrt] hrt_init starting\n");
 	sq_init(&callout_queue);
 
 	/* Enable peripheral clock for TC0 */
 	uint32_t regval = getreg32(SAM_PMC_PCER0);
+	syslog(LOG_ERR, "[hrt] SAM_PMC_PCER0 before: 0x%08lx\n", (unsigned long)regval);
 	regval |= HRT_TIMER_PCER;
 	putreg32(regval, SAM_PMC_PCER0);
+	syslog(LOG_ERR, "[hrt] SAM_PMC_PCER0 after: 0x%08lx\n", (unsigned long)getreg32(SAM_PMC_PCER0));
 
 	/* Disable TC clock */
 	putreg32(TC_CCR_CLKDIS, rCCR);
@@ -164,8 +168,10 @@ void hrt_init(void)
 	/* Select prescaler to get as close to 1MHz as possible */
 	if (HRT_TIMER_CLOCK / 8 > 1000000) {
 		cmr |= TC_CMR_TCCLKS_MCK32;  /* MCK/32 */
+		syslog(LOG_ERR, "[hrt] Using MCK/32 prescaler\n");
 	} else {
 		cmr |= TC_CMR_TCCLKS_MCK8;   /* MCK/8 */
+		syslog(LOG_ERR, "[hrt] Using MCK/8 prescaler\n");
 	}
 
 	putreg32(cmr, rCMR);
@@ -185,6 +191,15 @@ void hrt_init(void)
 	/* Initialize absolute time base */
 	hrt_absolute_time_base = 0;
 	hrt_counter_wrap_count = 0;
+
+	syslog(LOG_ERR, "[hrt] HRT initialized, testing...\n");
+
+	/* Test that timer is running */
+	uint32_t cv1 = getreg32(rCV);
+	for (volatile int i = 0; i < 100000; i++);
+	uint32_t cv2 = getreg32(rCV);
+	syslog(LOG_ERR, "[hrt] Counter test: CV1=0x%08lx CV2=0x%08lx diff=%lu\n",
+		(unsigned long)cv1, (unsigned long)cv2, (unsigned long)(cv2 - cv1));
 
 	hrtinfo("HRT initialized\n");
 }
