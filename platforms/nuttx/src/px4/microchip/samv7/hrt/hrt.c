@@ -82,11 +82,8 @@
 #define HRT_INTERVAL_MIN	50
 #define HRT_INTERVAL_MAX	50000
 
-/* HRT clock divisor - aim for 1MHz from MCK */
-#define HRT_DIVISOR		(HRT_TIMER_CLOCK / 1000000)
-
-/* Actual timer frequency after prescaler */
-#define HRT_ACTUAL_FREQ		(HRT_TIMER_CLOCK / HRT_DIVISOR)
+/* Actual timer frequency - MCK/32 prescaler (TC_CMR_TCCLKS_MCK32) */
+#define HRT_ACTUAL_FREQ		(HRT_TIMER_CLOCK / 32)
 
 /* Timer register addresses for TC0 Channel 0 */
 #define rCCR	(HRT_TIMER_BASE + SAM_TC_CCR_OFFSET)
@@ -107,10 +104,15 @@
 /* TC register definitions - use NuttX hardware definitions */
 /* NuttX provides these in hardware/sam_tc.h */
 
+/* Forward declarations */
+static int hrt_tim_isr(int irq, void *context, void *arg);
+
 /* Callout list */
 static struct sq_queue_s callout_queue;
 
 /* Latency histogram */
+#define LATENCY_BUCKET_COUNT 8
+__EXPORT const uint16_t latency_buckets[LATENCY_BUCKET_COUNT] = { 1, 2, 5, 10, 20, 50, 100, 1000 };
 __EXPORT uint32_t latency_actual_min = UINT32_MAX;
 __EXPORT uint32_t latency_actual_max = 0;
 
@@ -123,21 +125,21 @@ static uint32_t hrt_counter_wrap_count;
  */
 hrt_abstime hrt_absolute_time(void)
 {
+	uint64_t base;
 	uint32_t count;
 	irqstate_t flags;
-	uint64_t abstime;
 
 	flags = enter_critical_section();
 
-	/* Read current counter value */
+	/* Atomic read of base and counter */
+	base = hrt_absolute_time_base;
 	count = getreg32(rCV);
-
-	/* Calculate absolute time */
-	abstime = hrt_absolute_time_base + count;
 
 	leave_critical_section(flags);
 
-	return abstime;
+	/* Convert ticks to microseconds */
+	uint64_t total_ticks = base + count;
+	return (total_ticks * 1000000ULL) / HRT_ACTUAL_FREQ;
 }
 
 /**
@@ -192,7 +194,16 @@ void hrt_init(void)
 	hrt_absolute_time_base = 0;
 	hrt_counter_wrap_count = 0;
 
-	syslog(LOG_ERR, "[hrt] HRT initialized, testing...\n");
+	/* Attach interrupt handler */
+	irq_attach(HRT_TIMER_VECTOR, hrt_tim_isr, NULL);
+
+	/* Enable overflow interrupt (RC compare for wraparound) */
+	putreg32(TC_INT_CPCS, rIER);
+
+	/* Enable interrupt at NVIC level */
+	up_enable_irq(HRT_TIMER_VECTOR);
+
+	syslog(LOG_ERR, "[hrt] HRT initialized with interrupts, testing...\n");
 
 	/* Test that timer is running */
 	uint32_t cv1 = getreg32(rCV);
@@ -211,9 +222,16 @@ static void hrt_call_invoke(void)
 {
 	struct hrt_call *call;
 	hrt_abstime deadline __attribute__((unused));
-	hrt_abstime now = hrt_absolute_time();
 
-	while (true) {
+	/* Read time once at start to avoid critical section issues */
+	uint32_t now_cv = getreg32(rCV);
+	uint64_t base = hrt_absolute_time_base;
+	uint64_t now_ticks = base + now_cv;
+	hrt_abstime now = (now_ticks * 1000000ULL) / HRT_ACTUAL_FREQ;
+
+	int max_iterations = 16;  /* Prevent infinite loops */
+
+	while (max_iterations-- > 0) {
 		call = (struct hrt_call *)sq_peek(&callout_queue);
 
 		if (call == NULL) {
@@ -236,17 +254,23 @@ static void hrt_call_invoke(void)
 
 /**
  * Reschedule next alarm
+ * NOTE: Called from within critical section, so don't call hrt_absolute_time()
  */
 static void hrt_call_reschedule(void)
 {
-	hrt_abstime now = hrt_absolute_time();
+	/* Read counter directly - already in critical section from caller */
+	uint32_t now_cv = getreg32(rCV);
+	uint64_t base = hrt_absolute_time_base;
+	uint64_t now_ticks = base + now_cv;
+	hrt_abstime now_usec = (now_ticks * 1000000ULL) / HRT_ACTUAL_FREQ;
+
 	struct hrt_call *next = (struct hrt_call *)sq_peek(&callout_queue);
 
 	if (next != NULL) {
 		hrt_abstime deadline = next->deadline;
 
-		if (deadline < now) {
-			deadline = now + HRT_INTERVAL_MIN;
+		if (deadline < now_usec) {
+			deadline = now_usec + HRT_INTERVAL_MIN;
 		}
 	}
 }
@@ -254,7 +278,6 @@ static void hrt_call_reschedule(void)
 /**
  * HRT interrupt handler
  */
-__attribute__((unused))
 static int hrt_tim_isr(int irq, void *context, void *arg)
 {
 	uint32_t status;
